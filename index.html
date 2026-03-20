@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>과일을 맞추자!</title>
+    <!-- 구글 폰트 (귀여운 글씨체) -->
+    <link href="https://fonts.googleapis.com/css2?family=Jua&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.17.1/firebase-firestore-compat.js"></script>
+    <style>
+        :root {
+            --bg-sky: #87CEEB;
+            --bg-sea: #0077be;
+            --bg-sand: #f2d2a9;
+            --btn-yellow: #ffeb3b;
+        }
+
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; font-family: 'Jua', sans-serif;
+        }
+
+        /* 배경 설정: 해변 */
+        #game-container {
+            position: relative; width: 100%; height: 100%;
+            background: linear-gradient(to bottom, var(--bg-sky) 50%, var(--bg-sea) 70%, var(--bg-sand) 100%);
+        }
+
+        /* 홈 화면 */
+        #home-screen, #result-screen, #bonus-screen {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 10;
+        }
+
+        .title {
+            font-size: 80px; text-shadow: 4px 4px white; margin-bottom: 20px;
+            background: linear-gradient(to right, #ff4d4d, #4db34d);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+
+        .btn {
+            padding: 15px 40px; font-size: 30px; cursor: pointer;
+            background-color: var(--btn-yellow); border: 4px solid #000;
+            border-radius: 50px; color: black; transition: transform 0.2s;
+            margin: 10px; text-decoration: none;
+        }
+
+        .btn:hover { transform: scale(1.1); }
+
+        /* 야자수 (CSS로 간단히 구현) */
+        .palm-tree { position: absolute; bottom: 80px; font-size: 150px; z-index: 1; }
+        .palm-left { left: 50px; transform: rotate(-10deg); }
+        .palm-right { right: 50px; transform: rotate(10deg); }
+
+        /* 둥둥 떠다니는 과일 애니메이션 */
+        .floating-fruit {
+            position: absolute; font-size: 50px; bottom: 25%;
+            animation: float 4s infinite ease-in-out;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-30px) rotate(20deg); }
+        }
+
+        /* 게임 캔버스 */
+        #gameCanvas { display: none; background: transparent; cursor: crosshair; }
+
+        /* UI 레이어 */
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; font-size: 24px; color: white;
+            text-shadow: 2px 2px #000; display: none; pointer-events: none;
+        }
+
+        /* 메시지 레이어 */
+        .overlay {
+            display: none; position: absolute; inset: 0; background: rgba(0,0,0,0.5);
+            flex-direction: column; align-items: center; justify-content: center; z-index: 20;
+        }
+
+        .status-msg { font-size: 70px; color: white; margin-bottom: 30px; text-shadow: 3px 3px #ff4d4d; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <!-- 배경 장식 -->
+    <div class="palm-tree palm-left">🌴</div>
+    <div class="palm-tree palm-right">🌴</div>
+    
+    <!-- 홈 화면 -->
+    <div id="home-screen">
+        <h1 class="title">과일을 맞추자!</h1>
+        <div id="floating-fruits-container"></div>
+        <button class="btn" onclick="startGame()">게임 시작하기</button>
+    </div>
+
+    <!-- UI -->
+    <div id="ui-layer">
+        레벨: <span id="lvl">1</span> | 화살: <span id="arrows">5</span>
+    </div>
+
+    <!-- 게임 캔버스 -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- 결과 레이어 (성공/실패) -->
+    <div id="result-overlay" class="overlay">
+        <div id="status-text" class="status-msg">LEVEL UP!</div>
+        <button id="next-btn" class="btn" onclick="nextLevel()">다음 단계로 넘어가기</button>
+        <button id="retry-btn" class="btn" onclick="retryLevel()">다시하기</button>
+        <button class="btn" onclick="goHome()">홈 화면으로 돌아가기</button>
+    </div>
+
+    <!-- 보너스 안내 -->
+    <div id="bonus-overlay" class="overlay">
+        <div class="status-msg" style="color: gold;">ALL CLEAR!</div>
+        <button class="btn" onclick="startBonus()">보너스판을 하시겠습니까?</button>
+    </div>
+
+    <!-- 최종 성공 레이어 -->
+    <div id="final-overlay" class="overlay">
+        <div class="status-msg">SUCCESS!<br>모든 레벨 클리어!</div>
+        <div style="font-size: 100px;">🍍🍓🍌🥭🥝👏</div>
+        <button class="btn" onclick="goHome()">메인으로</button>
+    </div>
+</div>
+
+<script>
+    /** FIREBASE 설정 **/
+    const firebaseConfig = {
+        apiKey: "AIzaSyCdzcbGLaaHD910FCGT0pEuUikXGnddRG8",
+  authDomain: "fruit-game-f3a3e.firebaseapp.com",
+  projectId: "fruit-game-f3a3e",
+  storageBucket: "fruit-game-f3a3e.firebasestorage.app",
+  messagingSenderId: "655165147534",
+  appId: "1:655165147534:web:e6c805031cdc2e44923cdf"
+    };
+    // firebase.initializeApp(firebaseConfig);
+    // const db = firebase.firestore();
+
+    /** 게임 변수 **/
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let gameState = 'HOME';
+    let currentLevel = 1;
+    let arrowsLeft = 5;
+    let isShooting = false;
+    let arrowPos = { x: 0, y: 0, targetX: 0, targetY: 0, progress: 0 };
+    
+    const fruits = [
+        { name: "두리안", icon: "🍈", size: 120 }, // 두리안 대용
+        { name: "파인애플", icon: "🍍", size: 110 },
+        { name: "코코넛", icon: "🥥", size: 100 },
+        { name: "파파야", icon: "🍈", size: 90 },
+        { name: "용과", icon: "🌵", size: 80 }, // 용과 대용
+        { name: "스타후르츠", icon: "⭐", size: 70 },
+        { name: "바나나", icon: "🍌", size: 60 },
+        { name: "망고", icon: "🥭", size: 50 },
+        { name: "망고스틴", icon: "🟣", size: 40 },
+        { name: "딸기", icon: "🍓", size: 30 }
+    ];
+
+    let target = { x: 0, y: 0, speed: 2, dir: 1 };
+    let bonusFruits = [];
+
+    /** 초기화 **/
+    function init() {
+        resize();
+        createFloatingFruits();
+        window.addEventListener('resize', resize);
+    }
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+    }
+
+    function createFloatingFruits() {
+        const container = document.getElementById('floating-fruits-container');
+        fruits.forEach((f, i) => {
+            const span = document.createElement('div');
+            span.className = 'floating-fruit';
+            span.innerText = f.icon;
+            span.style.left = (10 + i * 8) + '%';
+            span.style.animationDelay = (i * 0.3) + 's';
+            container.appendChild(span);
+        });
+    }
+
+    /** 오디오 생성기 **/
+    let audioCtx;
+    function playSound(freq, type = 'sine', duration = 0.1) {
+        if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+    }
+
+    /** 게임 로직 **/
+    function startGame() {
+        gameState = 'PLAY';
+        currentLevel = 1;
+        resetLevel();
+        document.getElementById('home-screen').style.display = 'none';
+        document.getElementById('ui-layer').style.display = 'block';
+        canvas.style.display = 'block';
+        animate();
+    }
+
+    function resetLevel() {
+        arrowsLeft = 5;
+        isShooting = false;
+        const f = fruits[currentLevel - 1];
+        target = {
+            x: width / 2,
+            y: height / 2 - 100,
+            speed: 2 + currentLevel,
+            size: f.size,
+            icon: f.icon,
+            dir: 1
+        };
+        updateUI();
+    }
+
+    function updateUI() {
+        document.getElementById('lvl').innerText = currentLevel;
+        document.getElementById('arrows').innerText = (gameState === 'BONUS') ? '∞' : arrowsLeft;
+    }
+
+    function animate() {
+        if (gameState === 'HOME') return;
+        ctx.clearRect(0, 0, width, height);
+
+        drawTarget();
+        if (isShooting) drawArrow();
+        drawBow();
+
+        if (gameState === 'BONUS') {
+            moveBonusFruits();
+        } else {
+            moveTarget();
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    function drawBow() {
+        // 화려한 판타지 활 (SVG 스타일 재현)
+        ctx.save();
+        ctx.translate(width / 2, height - 100);
+        
+        // 활 몸체
+        ctx.strokeStyle = '#ffd700';
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.arc(0, 50, 150, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+
+        // 장식선
+        ctx.strokeStyle = '#ff00ff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 55, 155, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+
+        // 활 시위
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-120, -30);
+        ctx.lineTo(0, isShooting ? 20 : 50);
+        ctx.lineTo(120, -30);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawTarget() {
+        if (gameState === 'BONUS') {
+            bonusFruits.forEach(f => {
+                ctx.font = `${f.size}px serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText(f.icon, f.x, f.y);
+            });
+        } else {
+            ctx.font = `${target.size}px serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(target.icon, target.x, target.y);
+        }
+    }
+
+    function moveTarget() {
+        target.x += target.speed * target.dir;
+        if (target.x > width - 100 || target.x < 100) target.dir *= -1;
+    }
+
+    function moveBonusFruits() {
+        bonusFruits.forEach(f => {
+            f.x += f.vx; f.y += f.vy;
+            if(f.x < 50 || f.x > width - 50) f.vx *= -1;
+            if(f.y < 50 || f.y > height - 300) f.vy *= -1;
+        });
+    }
+
+    function drawArrow() {
+        arrowPos.progress += 0.05;
+        const curX = width/2 + (arrowPos.targetX - width/2) * arrowPos.progress;
+        const curY = (height-100) + (arrowPos.targetY - (height-100)) * arrowPos.progress;
+        
+        ctx.save();
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(curX, curY);
+        ctx.lineTo(curX, curY + 40);
+        ctx.stroke();
+        ctx.restore();
+
+        if (arrowPos.progress >= 1) {
+            checkHit(arrowPos.targetX, arrowPos.targetY);
+            isShooting = false;
+        }
+    }
+
+    /** 충돌 판정 **/
+    function checkHit(tx, ty) {
+        if (gameState === 'BONUS') {
+            const index = bonusFruits.findIndex(f => {
+                const dist = Math.hypot(f.x - tx, f.y - ty);
+                return dist < f.size / 2;
+            });
+            if (index > -1) {
+                playSound(600, 'square');
+                bonusFruits.splice(index, 1);
+                if (bonusFruits.length === 0) showFinalSuccess();
+            }
+        } else {
+            const dist = Math.hypot(target.x - tx, target.y - ty);
+            if (dist < target.size / 2) {
+                playSound(500, 'sine');
+                showResult(true);
+            } else {
+                arrowsLeft--;
+                updateUI();
+                if (arrowsLeft <= 0) showResult(false);
+            }
+        }
+    }
+
+    /** 슛 액션 **/
+    window.addEventListener('mousedown', (e) => {
+        if (gameState !== 'PLAY' && gameState !== 'BONUS') return;
+        if (isShooting) return;
+
+        isShooting = true;
+        arrowPos = { 
+            targetX: e.clientX, 
+            targetY: e.clientY, 
+            progress: 0 
+        };
+        playSound(200, 'sawtooth', 0.2);
+    });
+
+    /** 화면 전환 및 결과 **/
+    function showResult(success) {
+        const overlay = document.getElementById('result-overlay');
+        const txt = document.getElementById('status-text');
+        overlay.style.display = 'flex';
+        
+        if (success) {
+            txt.innerText = 'LEVEL UP!';
+            txt.style.color = '#4db34d';
+            document.getElementById('next-btn').style.display = 'block';
+            document.getElementById('retry-btn').style.display = 'none';
+            // Firestore 저장 예시
+            // db.collection("scores").add({ level: currentLevel, time: Date.now() });
+        } else {
+            txt.innerText = 'TRY AGAIN!';
+            txt.style.color = '#ff4d4d';
+            document.getElementById('next-btn').style.display = 'none';
+            document.getElementById('retry-btn').style.display = 'block';
+        }
+    }
+
+    function nextLevel() {
+        if (currentLevel < 10) {
+            currentLevel++;
+            resetLevel();
+            document.getElementById('result-overlay').style.display = 'none';
+        } else {
+            document.getElementById('result-overlay').style.display = 'none';
+            document.getElementById('bonus-overlay').style.display = 'flex';
+        }
+    }
+
+    function retryLevel() {
+        resetLevel();
+        document.getElementById('result-overlay').style.display = 'none';
+    }
+
+    function goHome() {
+        location.reload();
+    }
+
+    function startBonus() {
+        gameState = 'BONUS';
+        document.getElementById('bonus-overlay').style.display = 'none';
+        bonusFruits = fruits.map(f => ({
+            ...f,
+            x: Math.random() * (width - 100) + 50,
+            y: Math.random() * (height / 2),
+            vx: (Math.random() - 0.5) * 10,
+            vy: (Math.random() - 0.5) * 10,
+            size: 60
+        }));
+        updateUI();
+    }
+
+    function showFinalSuccess() {
+        gameState = 'SUCCESS';
+        document.getElementById('final-overlay').style.display = 'flex';
+        playSound(800, 'sine', 0.5);
+    }
+
+    // 초기화 실행
+    init();
+    
+</script>
+</body>
+</html>
